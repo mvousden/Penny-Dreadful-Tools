@@ -42,6 +42,9 @@ def fetch(url: str, character_encoding: Optional[str] = None, force: bool = Fals
             return fetch(url, character_encoding, force, retry=False)
         raise FetchException(e)
 
+def head(url: str):
+    return SESSION.get(url)
+
 async def fetch_async(url: str) -> str:
     print(f'Async fetching {url}')
     try:
@@ -119,12 +122,10 @@ def acceptable_file(filepath: str) -> bool:
     return os.path.isfile(filepath) and os.path.getsize(filepath) > 1000
 
 def escape(str_input: str, skip_double_slash: bool = False) -> str:
-    # Expand 'AE' into two characters. This matches the legal list and
-    # WotC's naming scheme in Kaladesh, and is compatible with the
-    # image server and scryfall.
     s = str_input
     if skip_double_slash:
         s = s.replace('//', '-split-')
+    # Expand 'AE' into two characters. This matches the legal list and WotC's naming scheme in Kaladesh, and is compatible with the image server and scryfall.
     s = urllib.parse.quote_plus(s.replace(u'Æ', 'AE')).lower() # type: ignore # urllib isn't fully stubbed
     if skip_double_slash:
         s = s.replace('-split-', '//')

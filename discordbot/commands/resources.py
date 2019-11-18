@@ -11,21 +11,28 @@ from shared import fetch_tools
 @commands.command(aliases=['res', 'pdm'])
 async def resources(ctx: MtgContext, *, args: Optional[str]) -> None:
     """Useful pages related to `args`. Examples: 'tournaments', 'card Naturalize', 'deckcheck', 'league'."""
-    results = {}
     if args is None:
         args = ''
     if len(args) > 0:
-        results.update(resources_resources(args))
-        results.update(site_resources(args))
+        resources = all_resources(args)
+    await ctx.send(message(resources))
+
+def message(resources: Dict[str, str]) -> str:
     s = ''
-    if len(results) == 0:
+    if len(resources) == 0:
         s = 'PD resources: <{url}>'.format(url=fetcher.decksite_url('/resources/'))
-    elif len(results) > 10:
+    elif len(resources) > 10:
         s = '{author}: Too many results, please be more specific.'.format(author=ctx.author.mention)
     else:
-        for url, text in results.items():
+        for url, text in resources.items():
             s += '{text}: <{url}>\n'.format(text=text, url=url)
-    await ctx.send(s)
+    return s.strip()
+
+def all_resources(args: str) -> Dict[str, str]:
+    results = {}
+    results.update(resources_resources(args))
+    results.update(site_resources(args))
+    return results
 
 def site_resources(args: str) -> Dict[str, str]:
     results = {}
@@ -49,10 +56,14 @@ def site_resources(args: str) -> Dict[str, str]:
     matches = [endpoint for endpoint in sitemap if endpoint.startswith('/{area}/'.format(area=area))]
     if len(matches) > 0:
         detail = '{detail}/'.format(
-            detail=fetch_tools.escape(detail, True)) if detail else ''
+            detail=fetch_tools.escape(detail, True)).replace('+', '-') if detail else ''
         url = fetcher.decksite_url('{season_prefix}/{area}/{detail}'.format(
             season_prefix=season_prefix, area=fetch_tools.escape(area), detail=detail))
-        results[url] = args
+        if fetch_tools.head(url):
+            results[url] = args
+        # BAKERT
+        # elif fetch_tools.head(seasonized version):
+        #     results[url] = args
     return results
 
 
