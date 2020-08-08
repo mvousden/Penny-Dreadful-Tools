@@ -59,8 +59,6 @@ class View(BaseView):
         self.tournament_only: bool = False
         self._card_image_template: Optional[str] = None
         self._card_url_template: Optional[str] = None
-        self.show_matchup_grid = False
-        self.matchup_archetypes: List[Archetype] = []
 
     def season_id(self) -> int:
         return get_season_id()
@@ -352,27 +350,6 @@ class View(BaseView):
                 shown_end = True
             elif end_date:
                 t.league = {'class': 'ongoing', 'display': False}
-
-    def setup_matchups(self, archetypes: List[Archetype], matchups: List[Container], min_matches: int) -> None:
-        for hero in archetypes:
-            hero.matchups = []
-            matchups_by_enemy_id = {mu.id: mu for mu in matchups if mu.archetype_id == hero.id}
-            for enemy in archetypes:
-                mu = matchups_by_enemy_id.get(enemy.id, Container({'wins': 0, 'losses': 0}))
-                if mu.wins + mu.losses >= min_matches:
-                    hero.show_as_hero = True
-                    enemy.show_as_enemy = True
-                    self.show_matchup_grid = True
-                if mu and mu.wins + mu.losses > 0:
-                    prepare_matchup(mu, enemy)
-                    hero.matchups.append(mu)
-                else:
-                    hero.matchups.append(empty_matchup(enemy))
-        for hero in archetypes:
-            for mu in hero.matchups:
-                mu.show_as_enemy = mu.opponent_archetype.get('show_as_enemy', False)
-        self.matchup_archetypes = archetypes
-
 
 def prepare_matchup(mu: Container, opponent_archetype: Archetype) -> None:
     mu.has_data = True

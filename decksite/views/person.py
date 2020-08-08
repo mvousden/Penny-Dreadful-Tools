@@ -16,7 +16,6 @@ from shared.container import Container
 class Person(View):
     def __init__(self, person: ps.Person, cards: List[Card], archetypes: List[Archetype], all_archetypes: List[Archetype], matchups: List[Container], your_cards: Dict[str, List[str]], season_id: Optional[int]) -> None:
         super().__init__()
-        min_matches_for_matchups_grid = 10
         self.all_archetypes = all_archetypes
         self.person = person
         self.people = [person]
@@ -52,7 +51,6 @@ class Person(View):
         self.has_trailblazer_cards = len(self.trailblazer_cards) > 0
         self.unique_cards = your_cards['unique']
         self.has_unique_cards = len(self.unique_cards) > 0
-        self.setup_matchups(self.all_archetypes, matchups, min_matches_for_matchups_grid)
 
     def __getattr__(self, attr: str) -> Any:
         return getattr(self.person, attr)
