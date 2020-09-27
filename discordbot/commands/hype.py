@@ -8,7 +8,6 @@ from magic import rotation
 from shared import dtutil
 
 
-@commands.is_owner()
 @commands.command()
 async def hype(ctx: MtgContext) -> None:
     """Display the latest rotation hype message."""
@@ -16,8 +15,8 @@ async def hype(ctx: MtgContext) -> None:
     last_run_time = rotation.last_run_time()
     msg = None
     if until_rotation < datetime.timedelta(7) and last_run_time is not None:
-        msg = await bot.rotation_hype_message()
         rotation.clear_redis()
+        msg = await bot.rotation_hype_message()
     if msg:
         await ctx.send(msg)
     else:
