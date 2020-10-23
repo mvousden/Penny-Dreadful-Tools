@@ -5,7 +5,7 @@ from flask import url_for
 
 from decksite.data import deck, elo, query
 from decksite.database import db
-from magic import rotation
+from magic import seasons
 from magic.models import Deck
 from shared import dtutil, guarantee
 from shared import redis_wrapper as redis

@@ -18,7 +18,7 @@ from github.GithubException import GithubException
 
 import discordbot.commands
 from discordbot import command
-from magic import fetcher, multiverse, oracle, rotation, tournaments
+from magic import fetcher, multiverse, oracle, seasons, tournaments, rotation_info
 from magic.models import Card
 from shared import configuration, dtutil, fetch_tools, perf
 from shared import redis_wrapper as redis
@@ -310,10 +310,11 @@ class Bot(commands.Bot):
             logging.warning('rotation hype channel is not a text channel')
             return
         while self.is_ready():
-            until_rotation = rotation.next_rotation() - dtutil.now()
-            last_run_time = rotation.last_run_time()
+            until_rotation = seasons.next_rotation() - dtutil.now()
+            last_run_time = rotation_info.last_run_time()
             if until_rotation < datetime.timedelta(7) and last_run_time is not None:
                 if dtutil.now() - last_run_time < datetime.timedelta(minutes=5):
+                    rotation_info.clear_redis()
                     hype = await rotation_hype_message()
                     if hype:
                         await channel.send(hype)
@@ -354,10 +355,9 @@ async def get_role(guild: Guild, rolename: str, create: bool = False) -> Optiona
     return None
 
 async def rotation_hype_message() -> Optional[str]:
-    rotation.clear_redis()
-    runs, runs_percent, cs = rotation.read_rotation_files()
-    runs_remaining = rotation.TOTAL_RUNS - runs
-    newly_legal = [c for c in cs if c.hit_in_last_run and c.hits == rotation.TOTAL_RUNS / 2]
+    runs, runs_percent, cs = rotation_info.read_rotation_files()
+    runs_remaining = rotation_info.TOTAL_RUNS - runs
+    newly_legal = [c for c in cs if c.hit_in_last_run and c.hits == rotation_info.TOTAL_RUNS / 2]
     newly_eliminated = [c for c in cs if not c.hit_in_last_run and c.status == 'Not Legal' and c.hits_needed == runs_remaining + 1]
     newly_hit = [c for c in cs if c.hit_in_last_run and c.hits == 1]
     num_undecided = len([c for c in cs if c.status == 'Undecided'])

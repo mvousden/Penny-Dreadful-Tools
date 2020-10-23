@@ -14,7 +14,7 @@ from decksite import APP, get_season_id, prepare
 from decksite.data import archetype, competition
 from decksite.data.archetype import Archetype
 from decksite.deck_type import DeckType
-from magic import card_price, fetcher, legality, oracle, rotation, tournaments
+from magic import card_price, fetcher, legality, oracle, seasons, tournaments
 from magic.models import Deck
 from shared import dtutil
 from shared.container import Container

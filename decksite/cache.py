@@ -8,7 +8,7 @@ from cachelib.simple import SimpleCache
 from flask import make_response, request
 
 from decksite import get_season_id
-from magic import rotation
+from magic import seasons
 from shared_web import localization
 
 CACHE = SimpleCache() # type: ignore

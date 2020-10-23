@@ -1,7 +1,7 @@
 import json
 
 import requests
-from lxml import etree
+from lxml import etree  # pylint: disable=no-name-in-module
 
 from . import repo
 
