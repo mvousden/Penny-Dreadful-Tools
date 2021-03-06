@@ -19,35 +19,73 @@ TOP_8 = 't8'
 
 ALIASES: Dict[str, str] = {}
 
+def ad_hoc(limit: int = 5) -> None:
+    soup = BeautifulSoup(fetch_tools.fetch('https://gatherling.com/eventreport.php?format=Penny+Dreadful&series=&season=&mode=Filter+Events', character_encoding='utf-8'), 'html.parser')
+    tournaments = [(gatherling_url(link['href']), link.string) for link in soup.find_all('a') if link['href'].find('eventreport.php?') >= 0]
+    n = 0
+    for (url, name) in tournaments:
+        i = tournament(url, name)
+        n = n + i
+        if n > limit:
+            return
 
-def scrape() -> None:
-    events = fetch_tools.fetch_json('https://gatherling.com/api.php?action=recent_events')
-    for (name, data) in events.items():
-        tournament(name, data)
+def tournament(url: str, name: str) -> int:
+    s = fetch_tools.fetch(url, character_encoding='utf-8', retry=True)
 
-def tournament(name: str, data: dict) -> int:
-    dt = get_dt(data['start'], dtutil.GATHERLING_TZ)
-    competition_series = data['series']
-    url = 'https://gatherling.com/eventreport.php?event=' + name
-    top_n = find_top_n(data['finalrounds'])
+    # Tournament details
+    soup = BeautifulSoup(s, 'html.parser')
+    cell = soup.find('div', {'id': 'EventReport'}).find_all('td')[1]
+
+    name = cell.find('a').string.strip()
+    day_s = cell.find('br').next.strip()
+    if '-0001' in day_s:
+        # Tournament has been incorrectly configured.
+        return 0
+
+    dt, competition_series = get_dt_and_series(name, day_s)
+    top_n = find_top_n(soup)
+    if top_n == competition.Top.NONE: # Tournament is in progress.
+        logger.info('Skipping an in-progress tournament.')
+        return 0
     db().begin('tournament')
     competition_id = competition.get_or_insert_competition(dt, dt, name, competition_series, url, top_n)
-    ranks = rankings(data)
-    medals = medal_winners(data)
+    ranks = rankings(soup)
+    medals = medal_winners(s)
     final = finishes(medals, ranks)
-    n = add_decks(dt, competition_id, final, data)
+    n = add_decks(dt, competition_id, final, s)
     db().commit('tournament')
     return n
 
-def get_dt(start: str, timezone: Any) -> datetime.datetime:
-    return dtutil.parse(start, '%d %B %Y %H:%M', timezone)
+# Hack in the known start time and series name because it's not in the page, depending on the series.
+def get_dt_and_series(name: str, day_s: str) -> Tuple[datetime.datetime, str]:
+    if 'APAC' in name:
+        competition_series = 'APAC Penny Dreadful Sundays'
+        start_time = '16:00'
+        dt = get_dt(day_s, start_time, dtutil.APAC_SERIES_TZ)
+    elif 'FNM' in name:
+        competition_series = 'Penny Dreadful FNM'
+        start_time = '19:00'
+        dt = get_dt(day_s, start_time, dtutil.GATHERLING_TZ)
+    else:
+        if 'Saturday' in name or 'Sunday' in name or 'PDS' in name:
+            start_time = '13:30'
+        else:
+            start_time = '19:00'
+        dt = get_dt(day_s, start_time, dtutil.GATHERLING_TZ)
+        competition_series = 'Penny Dreadful {day}s'.format(day=dtutil.day_of_week(dt, dtutil.GATHERLING_TZ))
+    return (dt, competition_series)
 
-def find_top_n(finalrounds: int) -> competition.Top:
-    if finalrounds == 0:
+def get_dt(day_s: str, start_time: str, timezone: Any) -> datetime.datetime:
+    date_s = day_s + ' {start_time}'.format(start_time=start_time)
+    return dtutil.parse(date_s, '%d %B %Y %H:%M', timezone)
+
+def find_top_n(soup: BeautifulSoup) -> competition.Top:
+    event_tables = soup.find('div', {'id': 'EventReport'}).find_all('table')
+    if len(event_tables) < 4: # Tournament is in progress, we don't have the Top N table yet.
         return competition.Top.NONE
-    return competition.Top(pow(2, finalrounds))
+    return competition.Top(int(event_tables[1].find_all('td')[1].string.strip().replace('TOP ', '')))
 
-def add_decks(dt: datetime.datetime, competition_id: int, final: Dict[str, int], data: dict) -> int:
+def add_decks(dt: datetime.datetime, competition_id: int, final: Dict[str, int], s: str) -> int:
     # The HTML of this page is so badly malformed that BeautifulSoup cannot really help us with this bit.
     rows = re.findall('<tr style=">(.*?)</tr>', s, re.MULTILINE | re.DOTALL)
     decks_added, ds = 0, []
@@ -71,27 +109,49 @@ def guess_archetypes(ds: List[deck.Deck]) -> None:
         if d.similar_decks and d.similar_decks[0].archetype_id is not None:
             archetype.assign(d.id, d.similar_decks[0].archetype_id, None, False)
 
-def rankings(data: dict) -> List[str]:
-    standings = []
-    for s in data['standings']:
-        standings.append(s['player'])
-    return standings
+def rankings(soup: BeautifulSoup) -> List[str]:
+    rows = soup.find(text='Current Standings').find_parent('table').find_all('tr')
 
-def medal_winners(data: dict) -> Dict[str, int]:
+    # Expected structure:
+    # <td colspan="8"><h6> Penny Dreadful Thursdays 1.02</h6></td>
+    # <td>Rank</td>, <td>Player</td>, <td>Match Points</td>, <td>OMW %</td>, <td>PGW %</td>, <td>OGW %</td>, <td>Matches Played</td>, <td>Byes</td>
+    # <td colspan="8"><br/><b> Tiebreakers Explained </b><p></p></td>
+    # <td colspan="8"> Players with the same number of match points are ranked based on three tiebreakers scores according to DCI rules. In order, they are: </td>
+    # <td colspan="8"> OMW % is the average percentage of matches your opponents have won. </td>
+    # <td colspan="8"> PGW % is the percentage of games you have won. </td>
+    # <td colspan="8"> OGW % is the average percentage of games your opponents have won. </td>
+    # <td colspan="8"> BYEs are not included when calculating standings. For example, a player with one BYE, one win, and one loss has a match win percentage of .50 rather than .66</td>
+    # <td colspan="8"> When calculating standings, any opponent with less than a .33 win percentage is calculated as .33</td>
+
+    rows = rows[2:-7]
+    ranks = []
+    for row in rows:
+        cells = row.find_all('td')
+        mtgo_username = aliased(cells[1].string)
+        ranks.append(mtgo_username)
+    return ranks
+
+def medal_winners(s: str) -> Dict[str, int]:
     winners = {}
-    for f in data['finalists']:
-        mtgo_username = aliased(f['player'], data['players'])
-        medal = f['medal']
-        if medal == WINNER:
-            winners[mtgo_username] = 1
-        elif medal == SECOND:
-            winners[mtgo_username] = 2
-        elif medal == TOP_4:
-            winners[mtgo_username] = 3
-        elif medal == TOP_8:
-            winners[mtgo_username] = 5
-        else:
-            raise InvalidDataException(f'Unknown medal `{medal}`')
+    # The HTML of this page is so badly malformed that BeautifulSoup cannot really help us with this bit.
+    rows = re.findall('<tr style=">(.*?)</tr>', s, re.MULTILINE | re.DOTALL)
+    for row in rows:
+        player = BeautifulSoup(row, 'html.parser').find_all('td')[2]
+        if player.find('img'):
+            mtgo_username = aliased(player.a.contents[0])
+            img = re.sub(r'styles/Chandra/images/(.*?)\.png', r'\1', player.img['src'])
+            if img == WINNER:
+                winners[mtgo_username] = 1
+            elif img == SECOND:
+                winners[mtgo_username] = 2
+            elif img == TOP_4:
+                winners[mtgo_username] = 3
+            elif img == TOP_8:
+                winners[mtgo_username] = 5
+            elif img == 'verified':
+                pass
+            else:
+                raise InvalidDataException('Unknown player image `{img}`'.format(img=img))
     return winners
 
 def finishes(winners: Dict[str, int], ranks: List[str]) -> Dict[str, int]:
