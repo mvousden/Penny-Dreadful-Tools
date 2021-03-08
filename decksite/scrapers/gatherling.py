@@ -1,10 +1,6 @@
 import datetime
-import re
-import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-import bs4
-from bs4 import BeautifulSoup, ResultSet
 
 from decksite.data import archetype, competition, deck, match, person
 from decksite.database import db
@@ -18,14 +14,16 @@ TOP_4 = 't4'
 TOP_8 = 't8'
 
 ALIASES: Dict[str, str] = {}
+PLAYERDATA: Dict[str, str] = {}
 
 
 def scrape() -> None:
     events = fetch_tools.fetch_json('https://gatherling.com/api.php?action=recent_events')
     for (name, data) in events.items():
-        tournament(name, data)
+        parse_tournament(name, data)
 
-def tournament(name: str, data: dict) -> int:
+def parse_tournament(name: str, data: dict) -> int:
+    PLAYERDATA.update(data['players'])
     dt = get_dt(data['start'], dtutil.GATHERLING_TZ)
     competition_series = data['series']
     url = 'https://gatherling.com/eventreport.php?event=' + name
@@ -48,18 +46,18 @@ def find_top_n(finalrounds: int) -> competition.Top:
     return competition.Top(pow(2, finalrounds))
 
 def add_decks(dt: datetime.datetime, competition_id: int, final: Dict[str, int], data: dict) -> int:
-    # The HTML of this page is so badly malformed that BeautifulSoup cannot really help us with this bit.
-    rows = re.findall('<tr style=">(.*?)</tr>', s, re.MULTILINE | re.DOTALL)
-    decks_added, ds = 0, []
-    matches: List[bs4.element.Tag] = []
-    for row in rows:
-        cells = BeautifulSoup(row, 'html.parser').find_all('td')
-        d = tournament_deck(cells, competition_id, dt, final)
+    decks_added = 0
+    ds: List[deck.Deck] = []
+    allds: List[deck.Deck] = []
+    for dj in data['decks']:
+        d = tournament_deck(dj, competition_id, dt, final)
         if d is not None:
             if d.get('id') is None or not match.load_matches_by_deck(d):
                 decks_added += 1
+                d['gatherling_username'] = dj['playername']
                 ds.append(d)
-                matches += tournament_matches(d)
+            allds.append(d)
+    matches = parse_matches(data, allds)
     add_ids(matches, ds)
     insert_matches_without_dupes(dt, matches)
     guess_archetypes(ds)
@@ -80,7 +78,7 @@ def rankings(data: dict) -> List[str]:
 def medal_winners(data: dict) -> Dict[str, int]:
     winners = {}
     for f in data['finalists']:
-        mtgo_username = aliased(f['player'], data['players'])
+        mtgo_username = aliased(f['player'])
         medal = f['medal']
         if medal == WINNER:
             winners[mtgo_username] = 1
@@ -103,24 +101,24 @@ def finishes(winners: Dict[str, int], ranks: List[str]) -> Dict[str, int]:
             final[p] = r
     return final
 
-def tournament_deck(cells: ResultSet, competition_id: int, date: datetime.datetime, final: Dict[str, int]) -> Optional[deck.Deck]:
+def tournament_deck(deck_json: dict, competition_id: int, date: datetime.datetime, final: Dict[str, int]) -> Optional[deck.Deck]:
     d: deck.RawDeckDescription = {'source': 'Gatherling', 'competition_id': competition_id, 'created_date': dtutil.dt2ts(date)}
-    player = cells[2]
-    username = aliased(player.a.contents[0].string)
+    player = deck_json['playername']
+    username = aliased(player)
     d['mtgo_username'] = username
     d['finish'] = final.get(username)
-    link = cells[4].a
-    d['url'] = gatherling_url(link['href'])
-    d['name'] = link.string
-    if cells[5].find('a'):
-        d['archetype'] = cells[5].a.string
-    else:
-        d['archetype'] = cells[5].string
-    gatherling_id = urllib.parse.parse_qs(urllib.parse.urlparse(str(d['url'])).query)['id'][0]
+    if d['finish'] is None:
+        raise InvalidDataException(f'{username} has no finish')
+
+    gatherling_id = deck_json["id"]
+    d['url'] = gatherling_url(f'deck.php?mode=view&id={gatherling_id}')
+    d['name'] = deck_json['name']
+    d['archetype'] = deck_json['archetype']
     d['identifier'] = gatherling_id
     existing = deck.get_deck_id(d['source'], d['identifier'])
     if existing is not None:
         return deck.load_deck(existing)
+    # This probably should be using the JSON too, but one thing at a time
     dlist = decklist.parse(fetch_tools.post(gatherling_url('deckdl.php'), {'id': gatherling_id}))
     d['cards'] = dlist
     if len(dlist['maindeck']) + len(dlist['sideboard']) == 0:
@@ -128,52 +126,32 @@ def tournament_deck(cells: ResultSet, competition_id: int, date: datetime.dateti
         return None
     return deck.add_deck(d)
 
-def tournament_matches(d: deck.Deck) -> List[bs4.element.Tag]:
-    url = 'https://gatherling.com/deck.php?mode=view&id={identifier}'.format(identifier=d.identifier)
-    s = fetch_tools.fetch(url, character_encoding='utf-8', retry=True)
-    soup = BeautifulSoup(s, 'html.parser')
-    anchor = soup.find(string='MATCHUPS')
-    if anchor is None:
-        logger.warning('Skipping {id} because it has no MATCHUPS.'.format(id=d.id))
-        return []
-    table = anchor.findParents('table')[0]
-    rows = table.find_all('tr')
-    rows.pop(0) # skip header
-    rows.pop() # skip empty last row
-    return find_matches(d, rows)
-
 MatchListType = List[Dict[str, Any]]
 
-def find_matches(d: deck.Deck, rows: ResultSet) -> MatchListType:
+def parse_matches(tournament: dict, ds: List[deck.Deck]) -> MatchListType:
     matches = []
-    for row in rows:
-        tds = row.find_all('td')
-        if 'No matches were found for this deck' in tds[0].renderContents().decode('utf-8'):
-            logger.warning('Skipping {identifier} because it played no matches.'.format(identifier=d.identifier))
-            break
-        round_type, num = re.findall(r'([TR])(\d+)', tds[0].string)[0]
-        num = int(num)
-        if round_type == 'R':
-            elimination = 0
-            round_num = num
-        elif round_type == 'T':
-            elimination = num
-            round_num += 1
-        else:
-            raise InvalidDataException('Round was neither Swiss (R) nor Top 4/8 (T) in {round_type} for {id}'.format(round_type=round_type, id=d.id))
-        if 'Bye' in tds[1].renderContents().decode('utf-8') or 'No Deck Found' in tds[5].renderContents().decode('utf-8'):
-            left_games, right_games, right_identifier = 2, 0, None
-        else:
-            left_games, right_games = tds[2].string.split(' - ')
-            href = tds[5].find('a')['href']
-            right_identifier = re.findall(r'id=(\d+)', href)[0]
+
+    decks = {}
+    for d in ds:
+        decks[d['gatherling_username']] = d
+
+    for m in tournament['matches']:
+        deck_a = decks[m['playera']]
+        deck_b = decks[m['playerb']]
+
+        roundnum = m['round']
+        elimination = 0
+        if m['timing'] == 2:
+            roundnum = roundnum + tournament['mainrounds']
+            ... # TODO: Need to cross-reference tournament[finalrounds] with m[round] to get Top X
+
         matches.append({
-            'round': round_num,
+            'round': roundnum,
             'elimination': elimination,
-            'left_games': left_games,
-            'left_identifier': d.identifier,
-            'right_games': right_games,
-            'right_identifier': right_identifier
+            'left_games': m['playera_wins'],
+            'left_identifier': deck_a.identifier,
+            'right_games': m['playerb_wins'],
+            'right_identifier': deck_b.identifier
         })
     return matches
 
