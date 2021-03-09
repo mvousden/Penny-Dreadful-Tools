@@ -33,7 +33,7 @@ def parse_tournament(name: str, data: dict) -> None:
     url = 'https://gatherling.com/eventreport.php?event=' + urllib.parse.quote(name)
     top_n = find_top_n(data['finalrounds'])
     if not db().select('SELECT id FROM competition_series WHERE name = %s', [competition_series]):
-        return 0
+        return
     db().begin('tournament')
     competition_id = competition.get_or_insert_competition(dt, dt, name, competition_series, url, top_n)
     ranks = rankings(data)
@@ -41,9 +41,6 @@ def parse_tournament(name: str, data: dict) -> None:
     final = finishes(medals, ranks)
     n = add_decks(dt, competition_id, final, data)
     db().commit('tournament')
-
-def get_dt(start: str, timezone: Any) -> datetime.datetime:
-    return
 
 def find_top_n(finalrounds: int) -> competition.Top:
     if finalrounds == 0:
