@@ -54,10 +54,13 @@ def add_decks(dt: datetime.datetime, competition_id: int, final: Dict[str, int],
     for dj in data['decks']:
         d = tournament_deck(dj, competition_id, dt, final)
         if d is not None:
+            gatherling_username = dj['playername']
+            d['gatherling_username'] = gatherling_username
             if d.get('id') is None or not match.load_matches_by_deck(d):
-                decks_added += 1
-                d['gatherling_username'] = dj['playername']
+                d['mtgo_username'] = gatherling2mtgo(gatherling_username)
+                d['identifier'] = dj['id']
                 ds.append(d)
+                decks_added += 1
             allds.append(d)
     matches = parse_matches(data, allds)
     add_ids(matches, ds)
@@ -74,13 +77,13 @@ def guess_archetypes(ds: List[deck.Deck]) -> None:
 def rankings(data: dict) -> List[str]:
     standings = []
     for s in data['standings']:
-        standings.append(s['player'])
+        standings.append(gatherling2mtgo(s['player']))
     return standings
 
 def medal_winners(data: dict) -> Dict[str, int]:
     winners = {}
     for f in data['finalists']:
-        mtgo_username = aliased(f['player'])
+        mtgo_username = gatherling2mtgo(f['player'])
         medal = f['medal']
         if medal == WINNER:
             winners[mtgo_username] = 1
@@ -106,12 +109,11 @@ def finishes(winners: Dict[str, int], ranks: List[str]) -> Dict[str, int]:
 def tournament_deck(deck_json: dict, competition_id: int, date: datetime.datetime, final: Dict[str, int]) -> Optional[deck.Deck]:
     d: deck.RawDeckDescription = {'source': 'Gatherling', 'competition_id': competition_id, 'created_date': dtutil.dt2ts(date)}
     player = deck_json['playername']
-    username = aliased(player)
-    d['mtgo_username'] = username
-    d['finish'] = final.get(username)
+    mtgo_username = gatherling2mtgo(player)
+    d['mtgo_username'] = mtgo_username
+    d['finish'] = final.get(mtgo_username)
     if d['finish'] is None:
-        raise InvalidDataException(f'{username} has no finish')
-
+        raise InvalidDataException(f'{mtgo_username} has no finish')
     gatherling_id = deck_json["id"]
     d['url'] = gatherling_url(f'deck.php?mode=view&id={gatherling_id}')
     d['name'] = deck_json['name']
@@ -142,10 +144,13 @@ def parse_matches(tournament: dict, ds: List[deck.Deck]) -> MatchListType:
         deck_b = decks[m['playerb']]
 
         roundnum = m['round']
-        elimination = 0
-        if m['timing'] == 2:
-            roundnum = roundnum + tournament['mainrounds']
-            ... # TODO: Need to cross-reference tournament[finalrounds] with m[round] to get Top X
+        # 'elimination' is an optional int with meaning: NULL = nontournament, 0 = Swiss, 8 = QF, 4 = SF, 2 = F
+        if roundnum <= tournament['mainrounds']:
+            elimination = 0
+        else:
+            rounds_after_this = tournament['mainrounds'] + tournament['finalrounds'] - roundnum
+            remaining_rounds = rounds_after_this + 1
+            elimination = pow(2, remaining_rounds) # 1 => 2, 2 => 4, 3 => 8 which are the values 'elimination' expects
 
         matches.append({
             'round': roundnum,
@@ -184,6 +189,14 @@ def gatherling_url(href: str) -> str:
     if href.startswith('http'):
         return href
     return 'https://gatherling.com/{href}'.format(href=href)
+
+def gatherling2mtgo(gatherling_username: str) -> str:
+    k = gatherling_username.lower() # Lowercase to account for some API inconsistencies - see Gatherling issue #145.
+    mtgo_username = PLAYERDATA[k]['mtgo_username'] # Will KeyError if missing but …
+    # … default to Gatherling username if you haven't given us a definite mtgo_username yet.
+    if mtgo_username is None:
+        mtgo_username = gatherling_username
+    return aliased(mtgo_username)
 
 def aliased(username: str) -> str:
     if not ALIASES:
