@@ -1,4 +1,5 @@
 import datetime
+import urllib
 from typing import Any, Dict, List, Optional
 
 
@@ -22,12 +23,14 @@ def scrape() -> None:
     for (name, data) in events.items():
         parse_tournament(name, data)
 
-def parse_tournament(name: str, data: dict) -> int:
+def parse_tournament(name: str, data: dict) -> None:
     PLAYERDATA.update(data['players'])
-    dt = get_dt(data['start'], dtutil.GATHERLING_TZ)
+    dt = dtutil.parse(data['start'], '%Y-%m-%d %H:%M:%S', dtutil.GATHERLING_TZ)
     competition_series = data['series']
-    url = 'https://gatherling.com/eventreport.php?event=' + name
+    url = 'https://gatherling.com/eventreport.php?event=' + urllib.parse.quote(name)
     top_n = find_top_n(data['finalrounds'])
+    if not db().select('SELECT id FROM competition_series WHERE name = %s', [competition_series]):
+        return 0
     db().begin('tournament')
     competition_id = competition.get_or_insert_competition(dt, dt, name, competition_series, url, top_n)
     ranks = rankings(data)
@@ -35,10 +38,9 @@ def parse_tournament(name: str, data: dict) -> int:
     final = finishes(medals, ranks)
     n = add_decks(dt, competition_id, final, data)
     db().commit('tournament')
-    return n
 
 def get_dt(start: str, timezone: Any) -> datetime.datetime:
-    return dtutil.parse(start, '%d %B %Y %H:%M', timezone)
+    return
 
 def find_top_n(finalrounds: int) -> competition.Top:
     if finalrounds == 0:
