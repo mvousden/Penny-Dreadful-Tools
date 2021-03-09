@@ -26,7 +26,8 @@ def scrape() -> None:
         parse_tournament(name, data)
 
 def parse_tournament(name: str, data: dict) -> None:
-    PLAYERDATA.update(data['players'])
+    for d in data['players'].values():
+        PLAYERDATA[d['name'].lower()] = d
     dt = dtutil.parse(data['start'], '%Y-%m-%d %H:%M:%S', dtutil.GATHERLING_TZ)
     competition_series = data['series']
     url = 'https://gatherling.com/eventreport.php?event=' + urllib.parse.quote(name)
