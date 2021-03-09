@@ -14,7 +14,9 @@ SECOND = '2nd'
 TOP_4 = 't4'
 TOP_8 = 't8'
 
+# Map of Gatherling username to mtgo_username that decksite tracks for people that switched accounts.
 ALIASES: Dict[str, str] = {}
+# Key is Gatherling username, Value is a Dict of player info including mtgo_username.
 PLAYERDATA: Dict[str, str] = {}
 
 
